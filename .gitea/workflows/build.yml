@@ -1,0 +1,60 @@
+name: build-sign-push
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag, e.g. 0.1.0'
+        required: true
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install cosign + syft
+        run: |
+          curl -sL https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 -o /usr/local/bin/cosign
+          curl -sL https://github.com/anchore/syft/releases/download/v1.14.0/syft_1.14.0_linux_amd64.tar.gz | tar -xz -C /usr/local/bin syft
+          chmod +x /usr/local/bin/cosign /usr/local/bin/syft
+
+      - name: Login to internal registry
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login contribute.void42.internal -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+
+      - name: Build and push
+        env:
+          IMAGE: contribute.void42.internal/golden/virtuoso-exporter
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          docker build --network host -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"
+
+      - name: Sign and attest
+        env:
+          IMAGE: contribute.void42.internal/golden/virtuoso-exporter
+          TAG: ${{ steps.tag.outputs.value }}
+          COSIGN_PASSWORD: ""
+          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
+        run: |
+          echo "$COSIGN_KEY" > /tmp/cosign.key
+          syft "$IMAGE:$TAG" -o cyclonedx-json=/tmp/sbom.cdx.json
+          for ref in "$IMAGE:$TAG" "$IMAGE:latest"; do
+              cosign sign --key /tmp/cosign.key --yes "$ref"
+              cosign attest --key /tmp/cosign.key --type cyclonedx \
+                  --predicate /tmp/sbom.cdx.json --yes "$ref"
+          done
+          rm -f /tmp/cosign.key
