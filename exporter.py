@@ -17,6 +17,7 @@ naturally tolerate format drift across patch versions.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -44,6 +45,17 @@ DBA_PASSWORD = os.environ["DBA_PASSWORD"]
 LISTEN_PORT = int(os.environ.get("EXPORTER_PORT", "9477"))
 SCRAPE_INTERVAL_SECONDS = int(os.environ.get("SCRAPE_INTERVAL_SECONDS", "15"))
 ISQL_BIN = os.environ.get("ISQL_BIN", "/opt/virtuoso-opensource/bin/isql")
+
+# Per-graph triple-count metric. The COUNT(*) over a named graph is
+# expensive on Virtuoso CE (linear scan; no native cardinality counter)
+# so we cap how often we re-run it. Default once every 15 minutes is
+# fine for a load-verification metric — the data-quality dashboard
+# refreshes on the user's timescale, not Prometheus's.
+TRACKED_GRAPHS_RAW = os.environ.get("TRACKED_GRAPHS", "")
+TRACKED_GRAPHS = [g.strip() for g in TRACKED_GRAPHS_RAW.split(",") if g.strip()]
+GRAPH_COUNT_INTERVAL_SECONDS = int(
+    os.environ.get("GRAPH_COUNT_INTERVAL_SECONDS", "900")
+)
 
 # ── Metrics ─────────────────────────────────────────────────
 up = Gauge("virtuoso_up", "1 if the last scrape succeeded; 0 otherwise")
@@ -94,6 +106,27 @@ sparql_ask_latency = Histogram(
 sparql_ask_failures = Counter(
     "virtuoso_sparql_ask_failures_total", "Probe SPARQL ASK failures"
 )
+
+graph_triple_count = Gauge(
+    "virtuoso_graph_triple_count",
+    "Triples in a named graph (cached; refreshed every "
+    "GRAPH_COUNT_INTERVAL_SECONDS).",
+    labelnames=("graph",),
+)
+graph_count_failures = Counter(
+    "virtuoso_graph_count_failures_total",
+    "Failed per-graph SPARQL COUNT queries.",
+    labelnames=("graph",),
+)
+graph_count_last_refresh = Gauge(
+    "virtuoso_graph_count_last_refresh_timestamp",
+    "Unix time of the last successful COUNT(*) for a graph.",
+    labelnames=("graph",),
+)
+
+# Internal: when each graph was last successfully sampled. Drives the
+# rate-limit so an expensive COUNT doesn't run on every 15s scrape tick.
+_LAST_GRAPH_COUNTS: dict[str, float] = {}
 
 
 # ── Status parsing ──────────────────────────────────────────
@@ -214,10 +247,65 @@ def collect_sparql_probe() -> None:
         sparql_ask_failures.inc()
 
 
+def _sparql_count_graph(graph_iri: str, timeout: float = 60.0) -> int:
+    """Run a SPARQL COUNT(*) against one named graph and return the
+    integer result. Raises on transport or parse failure — caller is
+    responsible for failure accounting."""
+    # Wrapping the count in a SELECT so the response shape stays
+    # uniform regardless of Virtuoso's query-rewrite choices.
+    query = (
+        "SELECT (COUNT(*) AS ?n) WHERE { GRAPH <"
+        + graph_iri
+        + "> { ?s ?p ?o } }"
+    )
+    body = urllib.parse.urlencode({
+        "query": query,
+        "format": "application/sparql-results+json",
+        "timeout": str(int(timeout * 1000)),
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        SPARQL_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/sparql-results+json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
+        payload = json.load(r)
+    bindings = payload.get("results", {}).get("bindings", [])
+    if not bindings:
+        return 0
+    return int(bindings[0]["n"]["value"])
+
+
+def collect_graph_counts(now: float | None = None) -> None:
+    """Refresh per-graph triple counts, rate-limited by
+    GRAPH_COUNT_INTERVAL_SECONDS. ``now`` is overridable for tests."""
+    if not TRACKED_GRAPHS:
+        return
+    if now is None:
+        now = time.monotonic()
+    for graph in TRACKED_GRAPHS:
+        last = _LAST_GRAPH_COUNTS.get(graph, 0.0)
+        if now - last < GRAPH_COUNT_INTERVAL_SECONDS:
+            continue
+        try:
+            n = _sparql_count_graph(graph)
+        except Exception:
+            graph_count_failures.labels(graph=graph).inc()
+            # Don't update _LAST_GRAPH_COUNTS — let the next tick retry.
+            continue
+        graph_triple_count.labels(graph=graph).set(n)
+        graph_count_last_refresh.labels(graph=graph).set(time.time())
+        _LAST_GRAPH_COUNTS[graph] = now
+
+
 def scrape_loop() -> None:
     while True:
         ok_status = collect_status()
         collect_sparql_probe()
+        collect_graph_counts()
         up.set(1 if ok_status else 0)
         time.sleep(SCRAPE_INTERVAL_SECONDS)
 
