@@ -8,7 +8,7 @@
 # install a second Python+Virtuoso stack.
 FROM contribute.void42.internal/golden/virtuoso-opensource-7:7.2.14 AS virtuoso
 
-FROM python:3.12-alpine
+FROM python:3.13-alpine
 
 # Pull in libstdc++ (Virtuoso links to it) and bash for the
 # isql wrapper.
