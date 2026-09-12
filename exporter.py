@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import time
 import urllib.parse
@@ -327,9 +328,40 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def install_stop_handlers(server, register=signal.signal) -> None:
+    """Stop serving when Kubernetes asks.
+
+    The ENTRYPOINT is exec-form ``python -u exporter.py``, so the
+    interpreter is PID 1 — and Linux does not apply default signal
+    actions to PID 1: a signal with no handler *registered* is ignored
+    outright, not fatal. Without this SIGTERM does nothing and the pod
+    only dies when the grace period expires and the kernel sends
+    SIGKILL, which stalls every node drain it is caught in.
+
+    shutdown() is dispatched to another thread deliberately: it blocks
+    until serve_forever() returns, and the handler runs on the thread
+    that is *inside* serve_forever, so calling it directly deadlocks.
+    """
+
+    def _stop(signum, _frame):
+        print(f"exporter: signal {signum} received, stopping", flush=True)
+        Thread(target=server.shutdown, daemon=True).start()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        register(sig, _stop)
+
+
 def main() -> None:
+    # Daemon, so it cannot hold the process open once serving stops.
     Thread(target=scrape_loop, daemon=True).start()
-    HTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()
+    server = HTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
+    install_stop_handlers(server)
+    try:
+        server.serve_forever()
+    finally:
+        # Releases the listening socket rather than leaving the kernel
+        # to reap it at exit.
+        server.server_close()
 
 
 if __name__ == "__main__":
