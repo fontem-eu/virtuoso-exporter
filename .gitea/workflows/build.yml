@@ -52,9 +52,13 @@ jobs:
         run: |
           echo "$COSIGN_KEY" > /tmp/cosign.key
           syft "$IMAGE:$TAG" -o cyclonedx-json=/tmp/sbom.cdx.json
-          for ref in "$IMAGE:$TAG" "$IMAGE:latest"; do
-              cosign sign --key /tmp/cosign.key --yes "$ref"
-              cosign attest --key /tmp/cosign.key --type cyclonedx \
-                  --predicate /tmp/sbom.cdx.json --yes "$ref"
-          done
+          # :$TAG and :latest name the same manifest, so one signature and
+          # one attestation on its digest cover both, and nothing is signed
+          # by a tag that can move. --tlog-upload=false: the image is
+          # private; nothing goes to the public Rekor log.
+          DIGEST=$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:$TAG" | grep -oE 'sha256:[0-9a-f]{64}' | head -1 || true)
+          [ -n "$DIGEST" ] || { echo "::error::could not resolve the pushed digest for $IMAGE:$TAG"; exit 1; }
+          cosign sign --tlog-upload=false --key /tmp/cosign.key --yes "$IMAGE@$DIGEST"
+          cosign attest --tlog-upload=false --key /tmp/cosign.key --type cyclonedx \
+              --predicate /tmp/sbom.cdx.json --yes "$IMAGE@$DIGEST"
           rm -f /tmp/cosign.key
