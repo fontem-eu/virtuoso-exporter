@@ -6,9 +6,12 @@
 # with the full Virtuoso image. To keep the layer slim we copy
 # isql + its shared libs out of the upstream image rather than
 # install a second Python+Virtuoso stack.
-FROM contribute.void42.internal/golden/virtuoso-opensource-7:7.2.14 AS virtuoso
+# Base images are pinned by digest: a tag can be re-pushed upstream and
+# change the build with no commit of ours (Docker Hub swapped Virtuoso
+# 7.2.17 for a 7.2.18-dev build in August 2026).
+FROM contribute.void42.internal/fontem/virtuoso-opensource-7:7.2.16@sha256:e7a5cd1915569d70d8363503dc62f6bf818b485f1501b230c7608cde8528c72d AS virtuoso
 
-FROM python:3.14-alpine
+FROM python:3.14-alpine@sha256:016508ba505da24f7139765bc4bb669df4e88eb2f12eeadd571bf2f88d7533df
 
 # Pull in libstdc++ (Virtuoso links to it) and bash for the
 # isql wrapper.
