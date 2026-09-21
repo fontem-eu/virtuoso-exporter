@@ -11,7 +11,7 @@
 # 7.2.17 for a 7.2.18-dev build in August 2026).
 FROM contribute.void42.internal/fontem/virtuoso-opensource-7:7.2.16@sha256:e7a5cd1915569d70d8363503dc62f6bf818b485f1501b230c7608cde8528c72d AS virtuoso
 
-FROM python:3.14-alpine@sha256:016508ba505da24f7139765bc4bb669df4e88eb2f12eeadd571bf2f88d7533df
+FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01
 
 # Pull in libstdc++ (Virtuoso links to it) and bash for the
 # isql wrapper.
