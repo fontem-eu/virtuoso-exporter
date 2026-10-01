@@ -2,30 +2,42 @@
 # same pod as the Virtuoso server so it can hit localhost:1111
 # (isql) and localhost:8890 (SPARQL HTTP).
 #
-# We need the openlink/virtuoso isql client, which only ships
-# with the full Virtuoso image. To keep the layer slim we copy
-# isql + its shared libs out of the upstream image rather than
-# install a second Python+Virtuoso stack.
-# Base images are pinned by digest: a tag can be re-pushed upstream and
-# change the build with no commit of ours (Docker Hub swapped Virtuoso
-# 7.2.17 for a 7.2.18-dev build in August 2026).
-FROM contribute.void42.internal/fontem/virtuoso-opensource-7:7.2.16@sha256:e7a5cd1915569d70d8363503dc62f6bf818b485f1501b230c7608cde8528c72d AS virtuoso
+# isql only ships with the Virtuoso image, and it is a glibc binary: the
+# previous python:3.14-alpine (musl) runtime had no loader for it, so every
+# status('') call failed and virtuoso_up stayed 0. Chainguard's Python is
+# glibc and already carries the OpenSSL, lzma, bz2 and tinfo libraries isql
+# links against; the three it lacks (libedit, libbsd, libmd) come from our
+# Virtuoso image, in a directory of their own.
+#
+# Bases are pinned by digest (Renovate keeps the Chainguard ones current).
+# The Virtuoso image is named by the registry's in-cluster host, the one
+# CI's docker-build-sign logs in to; outside the cluster, pass
+# --build-arg VIRTUOSO=contribute.void42.internal/... with the same digest.
+ARG VIRTUOSO=gitea-http.dev-tools.svc.cluster.local:3000/fontem/virtuoso-opensource-7@sha256:1dec54db8525fe250d58b4c29a8f57c3ba7ef5d8646e274737c150ea88ebf8e7
+FROM ${VIRTUOSO} AS virtuoso
 
-FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01
+FROM cgr.void42.internal/chainguard/python:latest-dev@sha256:5eef76bbb8d9f815317da126075705202b8ca5c2a151d723e7ecdf0373d9d861 AS build
+USER root
+ENV PIP_INDEX_URL=https://nexus.void42.internal/repository/pypi-proxy/simple/ \
+    PIP_TRUSTED_HOST=nexus.void42.internal
+RUN python -m venv /venv \
+ && /venv/bin/pip install --no-cache-dir prometheus-client==0.21.0 \
+ && /venv/bin/pip uninstall -y pip
 
-# Pull in libstdc++ (Virtuoso links to it) and bash for the
-# isql wrapper.
-RUN apk add --no-cache libstdc++ libgcc
-
+FROM cgr.void42.internal/chainguard/python:latest@sha256:a1775c7276078865461ee5714954284f12809f333433d856d720b249c65c11b2
+COPY --from=build /venv /venv
 COPY --from=virtuoso /opt/virtuoso-opensource/bin/isql /opt/virtuoso-opensource/bin/isql
-COPY --from=virtuoso /opt/virtuoso-opensource/lib/ /opt/virtuoso-opensource/lib/
-
-ENV LD_LIBRARY_PATH=/opt/virtuoso-opensource/lib
-
-RUN pip install --no-cache-dir prometheus-client==0.21.0
-
+COPY --from=virtuoso /usr/lib/x86_64-linux-gnu/libedit.so.2 \
+                     /usr/lib/x86_64-linux-gnu/libbsd.so.0 \
+                     /usr/lib/x86_64-linux-gnu/libmd.so.0 \
+                     /opt/virtuoso-opensource/lib/
+# Only sonames nothing else in the image provides, so the Python process
+# is unaffected by this path.
+ENV PATH="/venv/bin:$PATH" \
+    LD_LIBRARY_PATH=/opt/virtuoso-opensource/lib \
+    PYTHONUNBUFFERED=1
 COPY exporter.py /app/exporter.py
 WORKDIR /app
-
+USER 65532
 EXPOSE 9477
-ENTRYPOINT ["python", "-u", "exporter.py"]
+ENTRYPOINT ["/venv/bin/python", "-u", "exporter.py"]

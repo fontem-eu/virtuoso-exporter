@@ -45,7 +45,7 @@ containers:
   - name: virtuoso          # existing
     ...
   - name: exporter
-    image: contribute.void42.internal/golden/virtuoso-exporter:0.1.0
+    image: contribute.void42.internal/fontem/virtuoso-exporter:<tag>@sha256:<digest>
     env:
       - name: DBA_PASSWORD
         valueFrom:
@@ -66,5 +66,12 @@ git tag v0.1.0
 git push --tags
 ```
 
-Workflow builds, pushes, signs (cosign), attaches a CycloneDX
-SBOM. Verify externally with `cosign verify`.
+or dispatch `build-sign-push` with the tag. The workflow builds through
+`void42/ci-actions` docker-build-sign: it pushes
+`contribute.void42.internal/fontem/virtuoso-exporter:<tag>`, signs it, and
+attests a CycloneDX SBOM and SLSA provenance. Pin the digest in gitops and
+add the new tag to the exporter line in gitops `attest-shared.yml`.
+
+The runtime is Chainguard Python (glibc). isql is copied from our Virtuoso
+image together with the three libraries the runtime lacks (libedit, libbsd,
+libmd); a musl base cannot run it.
