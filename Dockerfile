@@ -24,7 +24,7 @@ RUN python -m venv /venv \
  && /venv/bin/pip install --no-cache-dir prometheus-client==0.21.0 \
  && /venv/bin/pip uninstall -y pip
 
-FROM cgr.void42.internal/chainguard/python:latest@sha256:275d5493a184cf00a421871b1197de8eeb30c91280a8a18c222d61d9fb2c7919
+FROM cgr.void42.internal/chainguard/python:latest@sha256:1961420e5f93bd056d4b0b40eca12cdf01b3ed09177aa4d6ec71fab38cbf158f
 COPY --from=build /venv /venv
 COPY --from=virtuoso /opt/virtuoso-opensource/bin/isql /opt/virtuoso-opensource/bin/isql
 COPY --from=virtuoso /usr/lib/x86_64-linux-gnu/libedit.so.2 \
