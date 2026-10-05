@@ -38,15 +38,27 @@ FROM cgr.void42.internal/chainguard/python:latest@sha256:1961420e5f93bd056d4b0b4
 COPY --from=build /venv /venv
 COPY --from=build /out/ /
 COPY --from=virtuoso /opt/virtuoso-opensource/bin/isql /opt/virtuoso-opensource/bin/isql
-COPY --from=virtuoso /usr/lib/x86_64-linux-gnu/libedit.so.2 \
+# Every library isql links except glibc, from the image it was built with,
+# so isql never depends on what the Python runtime happens to ship: the
+# runtime moved to OpenSSL 4 (libssl.so.4) in 2026-10 and dropped the
+# libssl.so.3 isql needs. None of these sonames is one the Python process
+# uses, so the path does not change it.
+COPY --from=virtuoso /usr/lib/x86_64-linux-gnu/libssl.so.3 \
+                     /usr/lib/x86_64-linux-gnu/libcrypto.so.3 \
+                     /usr/lib/x86_64-linux-gnu/libedit.so.2 \
+                     /usr/lib/x86_64-linux-gnu/libtinfo.so.6 \
                      /usr/lib/x86_64-linux-gnu/libbsd.so.0 \
                      /usr/lib/x86_64-linux-gnu/libmd.so.0 \
                      /opt/virtuoso-opensource/lib/
-# Only sonames nothing else in the image provides, so the Python process
-# is unaffected by this path.
+# isql loads OpenSSL's legacy provider at start; that libcrypto looks for it
+# at the path Ubuntu compiled in, which the Python runtime never uses.
+COPY --from=virtuoso /usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so /usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so
 ENV PATH="/venv/bin:$PATH" \
     LD_LIBRARY_PATH=/opt/virtuoso-opensource/lib \
     PYTHONUNBUFFERED=1
+# isql must load here and now: a missing library fails the build instead of
+# leaving virtuoso_up at 0 in production (exec form, the runtime has no shell).
+RUN ["/opt/virtuoso-opensource/bin/isql", "-?"]
 COPY exporter.py /app/exporter.py
 WORKDIR /app
 USER 65532

@@ -1,6 +1,6 @@
 """Declare what this image copies out of the Virtuoso image, for its SBOM.
 
-isql and three of the libraries it links are copied from Virtuoso's image
+isql and the libraries it links (all but glibc) are copied from Virtuoso's image
 rather than installed by a package manager, so no package database here
 lists them. Their identities come from that image itself: Virtuoso's version
 from its own declaration, the libraries' Ubuntu package versions from its
@@ -12,10 +12,15 @@ Usage: sbom-declare.py <virtuoso declared.json> <virtuoso dpkg status> <virtuoso
 import json
 import sys
 
-COPIED_LIBS = {  # file under /opt/virtuoso-opensource/lib -> Ubuntu package
-    "libedit.so.2": "libedit2",
-    "libbsd.so.0": "libbsd0",
-    "libmd.so.0": "libmd0",
+LIB = "/opt/virtuoso-opensource/lib"
+COPIED = {  # path in this image -> the Ubuntu package it comes from
+    f"{LIB}/libssl.so.3": "libssl3t64",
+    f"{LIB}/libcrypto.so.3": "libssl3t64",
+    "/usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so": "libssl3t64",
+    f"{LIB}/libedit.so.2": "libedit2",
+    f"{LIB}/libtinfo.so.6": "libtinfo6",
+    f"{LIB}/libbsd.so.0": "libbsd0",
+    f"{LIB}/libmd.so.0": "libmd0",
 }
 
 
@@ -38,13 +43,16 @@ def main(declared, status, os_release):
     distro = f"{osr['ID'].strip(chr(34))}-{osr['VERSION_ID'].strip(chr(34))}"
     have = dpkg_versions(status)
     comps = [dict(virtuoso, paths=["/opt/virtuoso-opensource/bin/isql"])]
-    for lib, package in COPIED_LIBS.items():
+    by_package = {}
+    for path, package in COPIED.items():
+        by_package.setdefault(package, []).append(path)
+    for package, paths in by_package.items():
         if package not in have:
-            sys.exit(f"{package} (for {lib}) is not in the Virtuoso image's dpkg database")
+            sys.exit(f"{package} (for {', '.join(paths)}) is not in the Virtuoso image's dpkg database")
         version, arch = have[package]
         comps.append({"name": package, "version": version, "type": "library",
                       "purl": f"pkg:deb/ubuntu/{package}@{version}?arch={arch}&distro={distro}",
-                      "paths": [f"/opt/virtuoso-opensource/lib/{lib}"]})
+                      "paths": paths})
     json.dump({"components": comps}, sys.stdout, indent=1)
     print()
 
