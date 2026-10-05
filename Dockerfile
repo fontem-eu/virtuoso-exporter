@@ -13,7 +13,7 @@
 # The Virtuoso image is named by the registry's in-cluster host, the one
 # CI's docker-build-sign logs in to; outside the cluster, pass
 # --build-arg VIRTUOSO=contribute.void42.internal/... with the same digest.
-ARG VIRTUOSO=gitea-http.dev-tools.svc.cluster.local:3000/fontem/virtuoso-opensource-7@sha256:1dec54db8525fe250d58b4c29a8f57c3ba7ef5d8646e274737c150ea88ebf8e7
+ARG VIRTUOSO=gitea-http.dev-tools.svc.cluster.local:3000/fontem/virtuoso-opensource-7@sha256:6e93fc5364b16105cfba9d36c37c0bb8538011bdc376dcf6317e1b2b2781c308
 FROM ${VIRTUOSO} AS virtuoso
 
 FROM cgr.void42.internal/chainguard/python:latest-dev@sha256:82943d7c508865fa97d15d129d524991100e66a8f89450233704d4ea70accd95 AS build
@@ -23,19 +23,42 @@ ENV PIP_INDEX_URL=https://nexus.void42.internal/repository/pypi-proxy/simple/ \
 RUN python -m venv /venv \
  && /venv/bin/pip install --no-cache-dir prometheus-client==0.21.0 \
  && /venv/bin/pip uninstall -y pip
+# isql and the three libraries are copied from the Virtuoso image, so no
+# package database here lists them: declare them for the SBOM, from that
+# image's own declaration and dpkg database (sbom-declare.py).
+COPY --from=virtuoso /usr/share/void42/sbom/declared.json /tmp/virtuoso/declared.json
+COPY --from=virtuoso /var/lib/dpkg/status /tmp/virtuoso/status
+COPY --from=virtuoso /usr/lib/os-release /tmp/virtuoso/os-release
+COPY sbom-declare.py /tmp/sbom-declare.py
+RUN mkdir -p /out/usr/share/void42/sbom \
+ && python /tmp/sbom-declare.py /tmp/virtuoso/declared.json /tmp/virtuoso/status /tmp/virtuoso/os-release \
+      > /out/usr/share/void42/sbom/declared.json
 
 FROM cgr.void42.internal/chainguard/python:latest@sha256:1961420e5f93bd056d4b0b40eca12cdf01b3ed09177aa4d6ec71fab38cbf158f
 COPY --from=build /venv /venv
+COPY --from=build /out/ /
 COPY --from=virtuoso /opt/virtuoso-opensource/bin/isql /opt/virtuoso-opensource/bin/isql
-COPY --from=virtuoso /usr/lib/x86_64-linux-gnu/libedit.so.2 \
+# Every library isql links except glibc, from the image it was built with,
+# so isql never depends on what the Python runtime happens to ship: the
+# runtime moved to OpenSSL 4 (libssl.so.4) in 2026-10 and dropped the
+# libssl.so.3 isql needs. None of these sonames is one the Python process
+# uses, so the path does not change it.
+COPY --from=virtuoso /usr/lib/x86_64-linux-gnu/libssl.so.3 \
+                     /usr/lib/x86_64-linux-gnu/libcrypto.so.3 \
+                     /usr/lib/x86_64-linux-gnu/libedit.so.2 \
+                     /usr/lib/x86_64-linux-gnu/libtinfo.so.6 \
                      /usr/lib/x86_64-linux-gnu/libbsd.so.0 \
                      /usr/lib/x86_64-linux-gnu/libmd.so.0 \
                      /opt/virtuoso-opensource/lib/
-# Only sonames nothing else in the image provides, so the Python process
-# is unaffected by this path.
+# isql loads OpenSSL's legacy provider at start; that libcrypto looks for it
+# at the path Ubuntu compiled in, which the Python runtime never uses.
+COPY --from=virtuoso /usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so /usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so
 ENV PATH="/venv/bin:$PATH" \
     LD_LIBRARY_PATH=/opt/virtuoso-opensource/lib \
     PYTHONUNBUFFERED=1
+# isql must load here and now: a missing library fails the build instead of
+# leaving virtuoso_up at 0 in production (exec form, the runtime has no shell).
+RUN ["/opt/virtuoso-opensource/bin/isql", "-?"]
 COPY exporter.py /app/exporter.py
 WORKDIR /app
 USER 65532
