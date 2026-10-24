@@ -34,7 +34,7 @@ RUN mkdir -p /out/usr/share/void42/sbom \
  && python /tmp/sbom-declare.py /tmp/virtuoso/declared.json /tmp/virtuoso/status /tmp/virtuoso/os-release \
       > /out/usr/share/void42/sbom/declared.json
 
-FROM cgr.void42.internal/chainguard/python:latest@sha256:f6b8842ea63af0021bc79d164c3023b5ea975031c80b6e6f7ade41640084d053
+FROM cgr.void42.internal/chainguard/python:latest@sha256:fd6d0771e8ec99b1710dfc3d72ca19ba2ff6b14f72b7978922ab0c8acb72c3f3
 COPY --from=build /venv /venv
 COPY --from=build /out/ /
 COPY --from=virtuoso /opt/virtuoso-opensource/bin/isql /opt/virtuoso-opensource/bin/isql
