@@ -16,7 +16,7 @@
 ARG VIRTUOSO=gitea-http.dev-tools.svc.cluster.local:3000/fontem/virtuoso-opensource-7@sha256:6e93fc5364b16105cfba9d36c37c0bb8538011bdc376dcf6317e1b2b2781c308
 FROM ${VIRTUOSO} AS virtuoso
 
-FROM cgr.void42.internal/chainguard/python:latest-dev@sha256:8a5780972067cfba4592b10e786a889807ed876c1100f89410fd0ed4e398992c AS build
+FROM cgr.void42.internal/chainguard/python:latest-dev@sha256:f543e40c72e83ef926f91dba626efa4fcc6ad997cd603fee07c038e4b6902fb7 AS build
 USER root
 ENV PIP_INDEX_URL=https://nexus.void42.internal/repository/pypi-proxy/simple/ \
     PIP_TRUSTED_HOST=nexus.void42.internal
